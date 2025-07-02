@@ -1,0 +1,553 @@
+---
+title: "Noise Pollution Research"
+author: "Cammi Tran"
+date: "2025-06-20"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+#load libraries
+library(tidyverse)   # collection of packages for data manipulation and visualization
+library(readr)       # functions for reading rectangular data like csv files
+library(ggplot2)     # data visualization using the grammar of graphics
+library(dplyr)       # tools for data wrangling and manipulation
+library(leaflet)     # create interactive maps
+library(hms)         # handle time-of-day values
+library(tidytext)    # text mining and analysis using tidy data principles
+library(stringr)     # consistent functions for string manipulation
+library(tidyr)       # helps tidy up data by reshaping or separating columns
+library(scales)      # formatting axes and legends in plots
+
+```
+
+### Data Cleaning
+
+```{r}
+#convert our months into seasons columns using mutate to make sure we don't have too many categories in our categorical values 
+sound_ordinance = sound_ordinance %>%
+  mutate(season = case_when(
+    EVENT_MONTH %in% c("DECEMBER", "JANUARY", "FEBRUARY") ~ "Winter",
+    EVENT_MONTH %in% c("MARCH", "APRIL", "MAY") ~ "Spring",
+    EVENT_MONTH %in% c("JUNE", "JULY", "AUGUST") ~ "Summer",
+    EVENT_MONTH %in% c("SEPTEMBER", "OCTOBER", "NOVEMBER") ~ "Fall"
+  )) %>%
+  filter(!is.na(season))
+
+
+#based off of subtype
+#END_HOURS_CONC_POUR_MON_SAT,END_HOURS_MOV_VEH_MON_SAT,END_HOURS_MOV_VEH_SUN,END_HOURS_NEAR_HOME_FRI_SAT,END_HOURS_NEAR_HOME_SUN_THUR,END_HOURS_NOT_NEAR_HOME
+#OMV_FRI_END_TIME,OMV_FRI_START_TIME,OMV_MON_END_TIME,OMV_MON_START_TIME,OMV_SAT_END_TIME,OMV_SAT_START_TIME,OMV_SUN_END_TIME,OMV_SUN_START_TIME,OMV_THU_END_TIME,OMV_THU_START_TIME,OMV_TUE_END_TIME,OMV_TUE_START_TIME,OMV_WED_END_TIME,OMV_WED_START_TIME
+#START_HOURS_CONC_POUR_MON_SAT,START_HOURS_MOV_VEH_MON_SAT,START_HOURS_MOV_VEH_SUN,START_HOURS_NEAR_HOME_FRI_SAT,START_HOURS_NEAR_HOME_SUN_THUR,START_HOURS_NOT_NEAR_HOME
+
+
+
+# END_HOURS_CONC_POUR_MON_SAT, END_HOURS_MOV_VEH_MON_SAT, END_HOURS_MOV_VEH_SUN,
+# END_HOURS_NEAR_HOME_FRI_SAT, END_HOURS_NEAR_HOME_SUN_THUR, END_HOURS_NOT_NEAR_HOME,
+# 
+# OMV_FRI_END_TIME, OMV_FRI_START_TIME, OMV_MON_END_TIME, OMV_MON_START_TIME,
+# OMV_SAT_END_TIME, OMV_SAT_START_TIME, OMV_SUN_END_TIME, OMV_SUN_START_TIME,
+# OMV_THU_END_TIME, OMV_THU_START_TIME, OMV_TUE_END_TIME, OMV_TUE_START_TIME,
+# OMV_WED_END_TIME, OMV_WED_START_TIME,
+# 
+# START_HOURS_CONC_POUR_MON_SAT, START_HOURS_MOV_VEH_MON_SAT,
+# START_HOURS_MOV_VEH_SUN, START_HOURS_NEAR_HOME_FRI_SAT,
+# START_HOURS_NEAR_HOME_SUN_THUR, START_HOURS_NOT_NEAR_HOME
+
+start_cols <- c(
+  "START_HOURS_CONC_POUR_MON_SAT", "START_HOURS_MOV_VEH_MON_SAT",
+  "START_HOURS_MOV_VEH_SUN", "START_HOURS_NEAR_HOME_FRI_SAT",
+  "START_HOURS_NEAR_HOME_SUN_THUR", "START_HOURS_NOT_NEAR_HOME",
+  "OMV_FRI_START_TIME", "OMV_MON_START_TIME", "OMV_SAT_START_TIME",
+  "OMV_SUN_START_TIME", "OMV_THU_START_TIME", "OMV_TUE_START_TIME", "OMV_WED_START_TIME"
+)
+
+end_cols <- c(
+  "END_HOURS_CONC_POUR_MON_SAT", "END_HOURS_MOV_VEH_MON_SAT",
+  "END_HOURS_MOV_VEH_SUN", "END_HOURS_NEAR_HOME_FRI_SAT",
+  "END_HOURS_NEAR_HOME_SUN_THUR", "END_HOURS_NOT_NEAR_HOME",
+  "OMV_FRI_END_TIME", "OMV_MON_END_TIME", "OMV_SAT_END_TIME",
+  "OMV_SUN_END_TIME", "OMV_THU_END_TIME", "OMV_TUE_END_TIME", "OMV_WED_END_TIME"
+)
+# First, convert all relevant columns to character
+sound_ordinance <- sound_ordinance %>%
+  mutate(across(all_of(c(start_cols, end_cols)), as.character))
+
+
+clean_messy_time <- function(x) {
+  x <- as.character(x)
+  x <- tolower(x)
+  x <- str_trim(x)
+  x <- str_replace_all(x, "midnight", "12:00am")
+  x <- str_replace_all(x, "noon", "12:00pm")
+  x <- str_replace_all(x, "\\.", "")
+  x <- str_replace_all(x, "([0-9]{1,2})([ap]m)$", "\\1:00\\2")
+  x <- str_replace(x, "^([0-9]{1,2})(:[0-9]{2})?(:[0-9]{2})?$", "\\1\\2")
+  x <- str_replace(x, ":00:00", ":00")
+
+  # Add am if no am/pm but looks like a time (and not midnight)
+  x <- ifelse(
+    !str_detect(x, "am|pm") & str_detect(x, "^[0-9]{1,2}(:[0-9]{2})?$") & !str_starts(x, "00"),
+    paste0(x, "am"),
+    x
+  )
+
+  parse_time(x, format = "%I:%M%p", na = c("review", "pendingreview", "", NA))
+}
+
+
+sound_ordinance <- sound_ordinance %>%
+  mutate(across(all_of(c(start_cols, end_cols)), clean_messy_time))
+
+
+
+
+# glimpse(sound_ordinance[start_cols])
+# glimpse(sound_ordinance[end_cols])
+library(dplyr)
+
+sound_ordinance <- sound_ordinance %>%
+  mutate(
+    start_time = pmin(!!!syms(start_cols), na.rm = TRUE),
+    end_time   = pmax(!!!syms(end_cols), na.rm = TRUE)
+  )
+
+```
+
+```{r}
+# define start and end columns based on your message
+start_cols <- c(
+  "START_HOURS_CONC_POUR_MON_SAT", "START_HOURS_MOV_VEH_MON_SAT",
+  "START_HOURS_MOV_VEH_SUN", "START_HOURS_NEAR_HOME_FRI_SAT",
+  "START_HOURS_NEAR_HOME_SUN_THUR", "START_HOURS_NOT_NEAR_HOME",
+  "OMV_FRI_START_TIME", "OMV_MON_START_TIME", "OMV_SAT_START_TIME",
+  "OMV_SUN_START_TIME", "OMV_THU_START_TIME", "OMV_TUE_START_TIME", "OMV_WED_START_TIME"
+)
+
+end_cols <- c(
+  "END_HOURS_CONC_POUR_MON_SAT", "END_HOURS_MOV_VEH_MON_SAT",
+  "END_HOURS_MOV_VEH_SUN", "END_HOURS_NEAR_HOME_FRI_SAT",
+  "END_HOURS_NEAR_HOME_SUN_THUR", "END_HOURS_NOT_NEAR_HOME",
+  "OMV_FRI_END_TIME", "OMV_MON_END_TIME", "OMV_SAT_END_TIME",
+  "OMV_SUN_END_TIME", "OMV_THU_END_TIME", "OMV_TUE_END_TIME", "OMV_WED_END_TIME"
+)
+
+sound_ordinance <- sound_ordinance %>%
+  mutate(across(all_of(c(start_cols, end_cols)), ~ replace_na(as.character(.), "")))
+
+
+sound_ordinance <- sound_ordinance %>%
+  mutate(across(all_of(c(start_cols, end_cols)), ~ as.character(replace_na(., ""))))
+
+
+
+clean_messy_time <- function(x) {
+  x <- as.character(x)
+  x <- str_to_lower(str_trim(x))
+
+  # normalize known mistakes and typos
+  x <- str_replace_all(x, "n00n", "12:00pm")  # fix typo
+  x <- str_replace_all(x, "noon", "12:00pm")
+  x <- str_replace_all(x, "midnight", "12:00am")
+  x <- str_replace_all(x, "\\.", "")
+  x <- str_replace_all(x, "\\s+(am|pm)", "\\1")
+
+  # fix triple 0s: "8:000pm" → "8:00pm"
+  x <- str_replace(x, ":(\\d{3})", function(m) {
+    val <- substr(m, 2, 4)
+    paste0(":", substr(val, 1, 2))  # keep only first 2 digits
+  })
+
+  # drop seconds: "2:15:00pm" → "2:15pm"
+  x <- str_replace(x, "(:[0-9]{2}):[0-9]{2}", "\\1")
+
+  # add :00 if "3pm" → "3:00pm"
+  x <- str_replace_all(x, "^([0-9]{1,2})(am|pm)$", "\\1:00\\2")
+
+  # add "am" if missing
+  x <- ifelse(
+    !str_detect(x, "am|pm") & str_detect(x, "^[0-9]{1,2}(:[0-9]{2})?$"),
+    paste0(x, "am"),
+    x
+  )
+
+  # handle bad values as NA
+  x <- ifelse(x %in% c("review", "pendingreview", "pending review", "na", ""), NA, x)
+
+  parse_time(x, format = "%I:%M%p", na = c(NA))
+}
+
+
+
+cleaned_times <- sound_ordinance %>%
+  mutate(across(all_of(start_cols), clean_messy_time, .names = "clean_{.col}")) %>%
+  mutate(across(all_of(end_cols), clean_messy_time, .names = "clean_{.col}")) %>%
+  pivot_longer(
+    cols = starts_with("clean_"),
+    names_to = c("type", "original_col"),
+    names_pattern = "clean_(START|END)_(.+)",
+    values_to = "time"
+  ) %>%
+  mutate(type = tolower(type)) %>%
+  pivot_wider(
+    names_from = type,
+    values_from = time,
+    values_fn = list
+  )
+
+
+
+```
+
+```{r}
+str(sound_ordinance[, start_cols])
+unique(sound_ordinance$START_HOURS_CONC_POUR_MON_SAT)
+```
+
+```{r}
+building_permit <- building_permit %>%
+  mutate(
+    LONGITUDE = parse_number(as.character(LONGITUDE)),
+    LATITUDE  = parse_number(as.character(LATITUDE))
+  )
+
+
+#050,POINT (-97.809237207775 30.176087212878) dirty data we don't need to include
+building_permit <- building_permit %>%
+  filter(PERMIT_TYPE == "Building Permit") %>%
+  filter(!is.na(LONGITUDE), !is.na(LATITUDE))  # Clean coordinate columns too
+
+```
+
+## EDA for Sound Ordinance
+
+```{r}
+summary(sound_ordinance)
+
+#create a bar chart to look at counts of events that obtained sound ordinance permits for each season
+sound_ordinance %>%
+  ggplot(aes(x = season, fill = season)) +
+  geom_bar() +
+  geom_text(stat = "count", aes(label = ..count..), vjust = -0.5) +
+  labs(
+    title = "Count of Sound Amplification Events by Season",
+    x = "Season",
+    y = "Count of Events"
+  ) +
+  theme(legend.position = "none")
+
+#create a bar chart to look at the sub-type of the events and count of events that obtained sound ordinance permits
+sound_ordinance %>%
+  ggplot(aes(x = SUB_TYPE, fill = SUB_TYPE)) +
+  geom_bar() +
+  geom_text(stat = "count", aes(label = ..count..), hjust = -0.1) +
+  labs(
+    title = "Count of Sound Amplification Events by Subtype",
+    x = "Sound Amplification Subtype",
+    y = "Count of Events"
+  ) +
+  theme(legend.position = "none") +
+  coord_flip()
+
+
+sound_ordinance %>%
+  ggplot(aes(x = AMPLIFIED_SOUND_DISTRICT, fill = AMPLIFIED_SOUND_DISTRICT)) +
+  geom_bar() +
+  geom_text(stat = "count", aes(label = ..count..), hjust = -0.1) +
+  labs(
+    title = "Count of Sound Amplification Events by District",
+    x = "Sound District",
+    y = "Count of Events"
+  ) +
+  theme(legend.position = "none") +
+  coord_flip()
+
+
+#viewed the  bubble chart of the location of events that obtained sound ordinance permits and its decibel level
+sound_ordinance %>%
+  ggplot()+
+  geom_point(aes(x= LONGITUDE, y= LATITUDE, size = DECIBEL_LEVEL), alpha = .5, color = "purple") +
+  labs(x = "Longitude (degrees)", y = "Latitude (degrees)", size = "Decibel Levels (db)", title= "Relationship between the Event's Decibels and Locations in Austin")
+
+
+leaflet(data = sound_ordinance) %>%
+  addProviderTiles(providers$CartoDB.Positron) %>% 
+  addCircleMarkers(
+    lng = ~LONGITUDE, lat = ~LATITUDE,
+    radius = ~DECIBEL_LEVEL / 50, 
+    color = "purple", fillOpacity = 0.2,
+    popup = ~paste("Decibel:", DECIBEL_LEVEL)
+  ) %>%
+  setView(lng = -97.74, lat = 30.27, zoom = 12)
+```
+
+```{r}
+time_long <- sound_ordinance %>%
+  select(start_time, end_time) %>%
+  pivot_longer(cols = c(start_time, end_time), names_to = "time_type", values_to = "time_value") %>%
+  filter(!is.na(time_value))
+
+
+# create breaks every hour (in seconds), then convert to hms
+time_breaks <- as_hms(seq(0, 23 * 3600, by = 3600))  # from 00:00:00 to 23:00:00
+
+ggplot(time_long, aes(x = time_value, fill = time_type)) +
+  geom_histogram(binwidth = 900, color = "white", alpha = 0.7, position = "identity") +
+  scale_x_time(
+    breaks = time_breaks,
+    labels = label_time(format = "%I:%M %p")  #adds am PM
+  ) +
+  labs(
+    title = "Distribution of Start and End Times for Sound Events",
+    x = "Time of Day",
+    y = "Number of Events",
+    fill = "Time Type"
+  ) +
+  theme_minimal()
+```
+
+## EDA for Building Permit
+
+```{r}
+
+summary(building_permit)
+
+subtype_counts <- building_permit %>%
+  count(SUB_TYPE) %>%
+  filter(n > 1000)
+
+building_permit %>%
+  filter(SUB_TYPE %in% subtype_counts$SUB_TYPE) %>%
+  ggplot(aes(x = SUB_TYPE, fill = ISSUED_IN_LAST_30_DAYS)) +
+  geom_bar(position = "stack") +
+  coord_flip() +
+  scale_fill_manual(values = c("Yes" = "steelblue", "No" = "gray80")) +
+  labs(
+    title = "Permit Count by SUB_TYPE (>1000) and Recency",
+    x = "SUB_TYPE",
+    y = "Count",
+    fill = "Issued in Last 30 Days?"
+  ) +
+  theme_minimal()
+
+building_permit %>%
+  filter(!is.na(WORK_TYPE)) %>%
+  ggplot(aes(x = WORK_TYPE, fill = ISSUED_IN_LAST_30_DAYS)) +
+  geom_bar(position = "stack") +
+  coord_flip() +
+  scale_fill_manual(values = c("Yes" = "steelblue", "No" = "gray80")) +
+  labs(
+    title = "Permit Count by WORK_TYPE and Recency",
+    x = "WORK_TYPE",
+    y = "Count",
+    fill = "Issued in Last 30 Days?"
+  ) +
+  theme_minimal()
+
+
+ leaflet(data = building_permit) %>%
+   addProviderTiles(providers$CartoDB.Positron) %>%
+   addHeatmap(
+     lng = ~LONGITUDE, lat = ~LATITUDE,
+     radius = 9, blur = 10, max = 0.05
+   ) %>%
+   setView(lng = -97.74, lat = 30.27, zoom = 12)
+
+```
+
+## EDA for Decibel Levels
+
+```{r}
+raw_data_location <- raw_data_location %>%
+  mutate(
+    Time = parse_time(Time, format = "%H:%M:%OS"),
+    location = as.factor(location)
+  ) %>%
+  filter(!is.na(Time))  # remove invalid time entries
+
+
+ggplot(raw_data_location, aes(x = Time, y = Recorded.Value..dBA.)) +
+  geom_line(color = "darkblue", alpha = 0.6) +
+  geom_hline(yintercept = 80, color = "red", linetype = "dashed", linewidth = 1) +
+  facet_wrap(~ location, scales = "free") +
+  labs(
+    title = "Sound Levels (dBA) Over Time by Location",
+    x = "Time of Day",
+    y = "Recorded Value (dBA)"
+  ) +
+  theme_minimal()
+
+
+raw_data_location %>%
+  group_by(location) %>%
+  summarise(mean_decibel = mean(Recorded.Value..dBA.), 
+            max_decibel = max(Recorded.Value..dBA.))
+
+
+summary(raw_data_location)
+
+```
+
+## EDA for Survey
+
+```{r}
+summary(survey_data)
+
+
+# make sure Comments is a character column
+survey_data$Comments <- as.character(survey_data$Comments)
+
+# unnest tokens and join sentiment lexicon
+sentiment_data <- survey_data %>%
+  select(Comments) %>%
+  unnest_tokens(word, Comments) %>%
+  inner_join(get_sentiments("bing"), by = "word")
+
+# count positive and negative words
+sentiment_summary <- sentiment_data %>%
+  count(sentiment) %>%
+  mutate(percentage = n / sum(n) * 100)
+
+print(sentiment_summary)
+
+
+
+
+ggplot(sentiment_summary, aes(x = sentiment, y = n, fill = sentiment)) +
+  geom_col() +
+  labs(title = "Overall Sentiment in Comments",
+       x = "Sentiment", y = "Word Count") +
+  theme_minimal()
+
+
+top_words <- sentiment_data %>%
+  count(word, sentiment, sort = TRUE) %>%
+  group_by(sentiment) %>%
+  top_n(10, n)
+
+ggplot(top_words, aes(x = reorder(word, n), y = n, fill = sentiment)) +
+  geom_col(show.legend = FALSE) +
+  facet_wrap(~ sentiment, scales = "free") +
+  coord_flip() +
+  labs(title = "Most Common Sentiment Words in Comments",
+       x = "Word", y = "Count") +
+  theme_minimal()
+```
+
+```{r}
+#Grades_Dummy,Concentration_Dummy,Happiness_Dummy,Health_Dummy,Accessibility_Dummy,Social_Dummy,Sleep_Dummy
+#SZB_Edu_dummy,UT_Tower_dummy,PCL_UTC_Dummy,Union_dummy,Burdine_dummy,GDC_WEL_Dummy,Belmont_dummy,PMA_dummy,Music_dummy
+
+
+# unnest words and attach sentiment (bing = pos/neg)
+sentiment_scores <- survey_data %>%
+  mutate(CommentID = row_number()) %>%
+  unnest_tokens(word, Comments) %>%
+  inner_join(get_sentiments("bing"), by = "word") %>%
+  count(CommentID, sentiment) %>%
+  pivot_wider(names_from = sentiment, values_from = n, values_fill = 0) %>%
+  mutate(sentiment_score = positive - negative)
+
+
+survey_data_sentiment <- survey_data %>%
+  mutate(CommentID = row_number()) %>%
+  left_join(sentiment_scores, by = "CommentID") %>%
+  mutate(sentiment_score = replace_na(sentiment_score, 0))
+
+
+
+location_dummies <- c("SZB_Edu_dummy", "UT_Tower_dummy", "PCL_UTC_Dummy",
+                      "Union_dummy", "Burdine_dummy", "GDC_WEL_Dummy",
+                      "Belmont_dummy", "PMA_dummy", "Music_dummy")
+
+location_sentiment <- survey_data_sentiment %>%
+  pivot_longer(cols = all_of(location_dummies), names_to = "Location", values_to = "Present") %>%
+  filter(Present == 1) %>%
+  group_by(Location) %>%
+  summarise(
+    avg_sentiment = mean(sentiment_score),
+    sd_sentiment = sd(sentiment_score),
+    n = n()
+  ) %>%
+  arrange(desc(avg_sentiment))
+
+
+
+experience_dummies <- c("Grades_Dummy", "Concentration_Dummy", "Happiness_Dummy",
+                        "Health_Dummy", "Accessibility_Dummy", "Social_Dummy", "Sleep_Dummy")
+
+experience_sentiment <- survey_data_sentiment %>%
+  pivot_longer(cols = all_of(experience_dummies), names_to = "Experience", values_to = "Present") %>%
+  filter(Present == 1) %>%
+  group_by(Experience) %>%
+  summarise(
+    avg_sentiment = mean(sentiment_score),
+    sd_sentiment = sd(sentiment_score),
+    n = n()
+  ) %>%
+  arrange(desc(avg_sentiment))
+
+
+ggplot(location_sentiment, aes(x = reorder(Location, avg_sentiment), y = avg_sentiment)) +
+  geom_col(fill = "steelblue") +
+  coord_flip() +
+  labs(title = "Average Comment Sentiment by Location",
+       x = "Location", y = "Average Sentiment Score") +
+  theme_minimal()
+
+
+```
+
+## Sentiment of Construction's Noises on Experiences/Comments
+
+```{r}
+
+wellbeing_vars <- c(
+  "Grades_Dummy", "Concentration_Dummy", "Happiness_Dummy",
+  "Health_Dummy", "Accessibility_Dummy", "Social_Dummy", "Sleep_Dummy"
+)
+
+survey_data_scored <- survey_data %>%
+  mutate(CommentID = row_number()) %>%
+  left_join(sentiment_scores, by = "CommentID") %>%
+  mutate(sentiment_score = replace_na(sentiment_score, 0))  # if no words matched
+
+
+# reshape data for plotting
+sentiment_long <- survey_data_scored %>%
+  select(sentiment_score, all_of(wellbeing_vars)) %>%
+  pivot_longer(cols = all_of(wellbeing_vars), names_to = "Category", values_to = "Present") %>%
+  filter(Present == 1)
+
+# boxplot
+ggplot(sentiment_long, aes(x = Category, y = sentiment_score, fill = Category)) +
+  geom_boxplot(outlier.color = "red", alpha = 0.7) +
+  coord_flip() +
+  labs(
+    title = "Sentiment Score Distribution by Wellbeing Concern",
+    x = "Wellbeing Category",
+    y = "Sentiment Score"
+  ) +
+  theme_minimal() +
+  theme(legend.position = "none")
+```
+
+### Correlation between location and negative sentiment
+
+```{r}
+# point-biserial correlation (same as Pearson on dummy)
+library(dplyr)
+library(purrr)
+
+cor_results <- map_dfr(wellbeing_vars, function(var) {
+  cor_val <- cor(survey_data_scored[[var]], survey_data_scored$sentiment_score, method = "pearson", use = "complete.obs")
+  tibble(Category = var, Correlation = cor_val)
+})
+
+print(cor_results)
+
+
+```
